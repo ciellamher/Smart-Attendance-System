@@ -4,13 +4,25 @@ import os
 import numpy as np
 from datetime import datetime
 import time
-import csv # NEW: To read the professor's database file
+import csv
+import json
 
 # ==========================================
-# ⚙️ SESSION SETTINGS
+# ⚙️ LOAD SESSION SETTINGS FROM DASHBOARD
 # ==========================================
-CURRENT_SUBJECT = "Intelligent Systems 101"
-PROFESSOR_NAME = "Prof. Dela Cruz"
+config_file = "session_config.json"
+if os.path.isfile(config_file):
+    with open(config_file, "r") as f:
+        config = json.load(f)
+        CURRENT_SUBJECT = config.get("subject", "Unknown Subject")
+        PROFESSOR_NAME = config.get("professor", "Unknown Prof")
+        START_TIME_STR = config.get("start_time", "00:00")
+        LATE_MINS = int(config.get("late_mins", 0))
+else:
+    CURRENT_SUBJECT = "Intelligent Systems 101"
+    PROFESSOR_NAME = "Prof. Dela Cruz"
+    START_TIME_STR = "09:00"
+    LATE_MINS = 15
 
 # ==========================================
 # 🗂️ DYNAMIC STUDENT DATABASE LOAD
@@ -18,15 +30,12 @@ PROFESSOR_NAME = "Prof. Dela Cruz"
 db_file = 'students.csv'
 STUDENT_DB = {}
 
-# 1. If the professor's database doesn't exist, auto-create a template!
 if not os.path.isfile(db_file):
     with open(db_file, 'w', newline='') as f:
         writer = csv.writer(f)
         writer.writerow(['Image_Name', 'Full_Name', 'Course', 'Section'])
         writer.writerow(['GRACIELLA', 'Graciella M. Jimenez', 'BS Computer Science', 'CS-3A'])
-    print(f"Created new database template: {db_file}")
 
-# 2. Read the database file into our system
 with open(db_file, mode='r', encoding='utf-8') as f:
     reader = csv.DictReader(f)
     for row in reader:
@@ -55,9 +64,7 @@ for key, info in STUDENT_DB.items():
     else:
         display_names[key] = surname 
 
-# ==========================================
-
-# --- STEP 1: ENCODINGS ---
+# --- ENCODINGS ---
 path = 'student_images'
 images = []
 classNames = []
@@ -65,7 +72,6 @@ myList = os.listdir(path)
 myList = [f for f in myList if not f.startswith('.')]
 
 print(f'Found {len(myList)} image(s). Encoding faces...')
-
 for cl in myList:
     curImg = cv2.imread(f'{path}/{cl}')
     images.append(curImg)
@@ -79,7 +85,10 @@ def findEncodings(images):
         encodeList.append(encode)
     return encodeList
 
-# --- ATTENDANCE LOGGING ---
+encodeListKnown = findEncodings(images)
+print('Encoding Complete! Starting Webcam...')
+
+# --- ATTENDANCE LOGGING (WITH LATE LOGIC) ---
 def markAttendance(raw_key):
     today_date = datetime.now().strftime('%b_%d_%Y')
     filename = f'Attendance_{today_date}.csv'
@@ -99,23 +108,28 @@ def markAttendance(raw_key):
             now = datetime.now()
             dtString = now.strftime('%H:%M:%S')
             
+            # Calculate if Present or Late
+            status = "Present"
+            try:
+                start_dt = datetime.strptime(START_TIME_STR, "%H:%M").time()
+                start_minutes = start_dt.hour * 60 + start_dt.minute
+                current_minutes = now.hour * 60 + now.minute
+                
+                if current_minutes > (start_minutes + LATE_MINS):
+                    status = "Late"
+            except Exception:
+                pass 
+            
             course = student_info["course"]
             section = student_info["section"]
-            status = "Present" 
             
             f.write(f'{full_name},{course},{section},{CURRENT_SUBJECT},{PROFESSOR_NAME},{dtString},{status}\n')
-            print(f"Logged {full_name} for {CURRENT_SUBJECT}")
+            print(f"Logged {full_name} as {status}")
+            return True, status
             
-            return True 
-            
-    return False 
+    return False, ""
 
-# ---------------------------------------------
-
-encodeListKnown = findEncodings(images)
-print('Encoding Complete! Starting Webcam...')
-
-# --- STEP 2: LIVE TEST WITH BEEP & SMART VOICE ---
+# --- LIVE CAMERA ---
 cap = cv2.VideoCapture(0)
 last_unknown_time = 0 
 
@@ -143,11 +157,12 @@ while True:
             cv2.rectangle(img, (x1, y2-35), (x2, y2), (0, 255, 0), cv2.FILLED)
             cv2.putText(img, display_name, (x1+6, y2-6), cv2.FONT_HERSHEY_COMPLEX, 1, (255, 255, 255), 2)
             
-            is_new_entry = markAttendance(raw_key)
+            is_new_entry, status = markAttendance(raw_key)
             
             if is_new_entry:
                 speak_name = display_name.replace(",", "")
-                os.system(f"(afplay /System/Library/Sounds/Ping.aiff && say '{speak_name}, Present. Next.') &") 
+                # Plays smooth voice without the glitchy beep
+                os.system(f"say 'Scanned. {speak_name}, {status}.' &") 
                 
         else:
             name = "UNKNOWN"
@@ -157,11 +172,10 @@ while True:
             
             current_time = time.time()
             if current_time - last_unknown_time > 5:
-                os.system("(afplay /System/Library/Sounds/Basso.aiff && say 'Unrecognized, not from this class. Next.') &")
+                os.system("say 'Unrecognized face detected.' &")
                 last_unknown_time = current_time
 
     cv2.imshow('Smart Attendance System', img)
-    
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
 
